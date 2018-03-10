@@ -20,48 +20,1018 @@
     <textarea id="source">
 
 ```tut:invisible
-
+import com.rossabaker.talks.tls2018._
 ```
 
 class: center, middle
 
-# http4s
-Ross A. Baker • `@rossabaker`
+# An HTTP service is just a Kleisli arrow from a streaming request to a streaming response in the option monad transformer applied to an arbitrary effect. What's the problem?
+
+Ross A. Baker • [`@rossabaker`](https://twitter.com/rossabaker)
 
 ???
 - notes here
 - see https://remarkjs.com/#1
 
 ---
-# Inline Scala examples
 
-```tut:silent
-case class Person(name: String, age: Int)
-```
+## Intro
 
-```tut:book
-val john = Person("John", 23)
-
-john.age
-
-john.copy(age = 30)
-```
-
-???
-- see https://github.com/tpolecat/tut
+- 2009: began writing Scala
+- 2010: helped start IndyScala meetup
+- 2011: lost source code to Scala 2.8 app, still running
+- 2012: began writing Scala professionally
+- 2013: started http4s project
+- 2014-2017: got increasingly functional
+- 2018: started writing Scala and Haskell at Formation
 
 ---
-# Scala examples from core module
+
+```tut:invisible
+def assert(a: Any, b: Any) = {
+  if (a == b)
+    println(s"✔ $a")
+  else {
+    println(s"❌ Expected: $a")
+    println(s"❌ Actual  : $b")
+  }
+}
+
+def asyncAssert(a: Any, bf: scala.concurrent.Future[Any]) = {
+  import scala.concurrent._
+  import scala.concurrent.duration._
+  val b = Await.result(bf, 3.seconds)
+  assert(a, b)
+}
+
+implicit val synchronousExecutionContext = 
+  scala.concurrent.ExecutionContext.fromExecutor(
+    new java.util.concurrent.Executor {
+      def execute(task: Runnable) = task.run()
+    })
+```
+
+# HTTP services
 
 ```tut:silent
-import com.rossabaker.talks.tls2018.Foo.{FooInt, FooString}
+import cats.data.{Kleisli, OptionT}
+
+trait Request[F[_]]
+trait Response[F[_]]
+type HttpService[F[_]] = Kleisli[OptionT[F, ?], Request[F], Response[F]]
+```
+
+---
+
+## Version 0.0.1
+
+```tut:silent
+case class Request(
+  method: String,
+  uri: String,
+  body: String,
+)
+case class Response(
+  status: Int, 
+  body: String,
+)
+```
+
+An HTTP service is just a function from a request to a response.
+
+```tut:silent
+type HttpService = Request => Response
+```
+
+---
+
+## Hello World
+
+```tut:silent
+val helloWorld: HttpService = {
+  case Request("POST", "/hello", name) =>
+    Response(200, s"Hello, $name!")
+}
+```
+```tut:invisible
+def loadTest(svc: HttpService) = println("😎" * 7)
+```
+
+---
+
+## Hello World
+
+```tut:silent
+val helloWorld: HttpService = {
+  case Request("POST", "/hello", name) =>
+    Response(200, s"Hello, $name!")
+}
+```
+
+### Unit test
+
+```tut:silent
+val req = Request("POST", "/hello", "Indy")
+```
+
+```tut
+assert("Hello, Indy!", helloWorld(req).body)
+```
+
+---
+
+## Hello World
+
+```tut:silent
+val helloWorld: HttpService = {
+  case Request("POST", "/hello", name) =>
+    Response(200, s"Hello, $name!")
+}
+```
+
+### Load test
+
+```tut
+loadTest(helloWorld)
+```
+
+---
+
+## Async backend
+
+```tut:silent
+import scala.concurrent._, duration._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    val resp = translate(name).map(Response(200, _))
+    Await.result(resp, 3.seconds)
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+---
+
+## Async backend
+
+```tut:silent
+import scala.concurrent._, duration._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    val resp = translate(name).map(Response(200, _))
+    Await.result(resp, 3.seconds)
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+### Unit test
+
+```tut:silent
+val req = Request("POST", "/translate", "one")
+```
+
+```tut
+assert("uno", englishToSpanish(req).body)
+```
+
+---
+
+## Async backend
+
+```tut:silent
+import scala.concurrent._, duration._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    val resp = translate(name).map(Response(200, _))
+    Await.result(resp, 3.seconds)
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+### Load test
+
+```tut:invisible
+def loadTest(svc: HttpService) = {}
+```
+
+```tut
+loadTest(englishToSpanish)
+```
+
+<center>
+<img src="https://i.imgflip.com/25pa35.jpg" alt="Await is bad and you should feel bad" style="height: 165px;"/>
+</center>
+
+---
+
+## Version 0.0.2
+
+An HTTP service is just a function from a request to a response in a
+future.
+
+```tut:silent
+type HttpService = Request => Future[Response]
+```
+
+---
+
+## Async backend, v0.0.2
+
+```tut:silent
+import scala.concurrent._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+---
+
+## Async backend, v0.0.2
+
+```tut:silent
+import scala.concurrent._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+### Unit test
+
+```tut:silent
+val req = Request("POST", "/translate", "one")
+```
+
+```tut
+asyncAssert("uno", englishToSpanish(req).map(_.body))
+```
+
+---
+
+## Async backend, v0.0.2
+
+```tut:silent
+import scala.concurrent._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+### Load test
+
+```tut:invisible
+def loadTest(svc: HttpService) = "✨✨✨ IT'S REACTIVE ✨✨✨"
+```
+
+```tut
+loadTest(englishToSpanish)
+```
+
+---
+
+## Async backend, v0.0.2
+
+```tut:silent
+import scala.concurrent._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+### But we said it was total and gave it a partial
+
+```tut:silent
+val req = Request("POST", "/traducir", "one")
+```
+
+```tut:fail
+asyncAssert("uno", englishToSpanish(req).map(_.body))
+```
+
+---
+
+## Version 0.0.3
+
+An HTTP service is just a partial function from a request to a
+response in a future.
+
+
+```tut:silent
+type HttpService = PartialFunction[Request, Future[Response]]
+
+val NotFoundF = Future.successful(Response(404, "😿"))
+```
+
+---
+
+## Async backend, v0.0.3
+
+```tut:silent
+import scala.concurrent._
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+---
+
+## Async backend, v0.0.3
+
+```tut:silent
+def svc(translate: String => Future[String]): HttpService = {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val englishToSpanish = svc(Translator(English, Spanish))
+```
+
+### Unit test
+
+```tut:silent
+val good = Request("POST", "/translate", "one")
+val bad = Request("POST", "/traducir", "one")
+```
+
+```tut
+asyncAssert(200, englishToSpanish.applyOrElse(good, 
+  Function.const(NotFoundF)).map(_.status))
+asyncAssert(404, englishToSpanish.applyOrElse(bad, 
+  Function.const(NotFoundF)).map(_.status))
+```
+
+---
+
+## Combining services with `orElse`
+
+```tut:silent
+val helloWorld: HttpService = {
+  case Request("POST", "/hello", name) => 
+    Future.successful(Response(200, s"Hello, $name!"))
+}
+val holaMundo: HttpService = {
+  case Request("POST", "/hola", name) => 
+    Future.successful(Response(200, s"¡Hola, $name!"))
+}
+val monolith: HttpService = helloWorld orElse holaMundo
+```
+
+---
+
+## Combining services with `orElse`
+
+```tut:silent
+val helloWorld: HttpService = {
+  case Request("POST", "/hello", name) => 
+    Future.successful(Response(200, s"Hello, $name!"))
+}
+val holaMundo: HttpService = {
+  case Request("POST", "/hola", name) => 
+    Future.successful(Response(200, s"¡Hola, $name!"))
+}
+val monolith: HttpService = helloWorld orElse holaMundo
+```
+
+### Unit test
+
+```tut:silent
+import cats.implicits._
+val en = Request("POST", "/hello", "Indy")
+val es = Request("POST", "/hola",  "Indy")
+```
+
+```tut
+asyncAssert("Hello, Indy!", monolith.applyOrElse(en, Function.const(NotFoundF)).map(_.body))
+asyncAssert("¡Hola, Indy!", monolith.applyOrElse(es, Function.const(NotFoundF)).map(_.body))
+```
+
+---
+
+## Combining services with `orElse`, v0.0.3
+
+```tut:silent
+val helloWorld: HttpService = {
+  case Request("POST", "/hello", name) => 
+    Future.successful(Response(200, s"Hello, $name!"))
+}
+val holaMundo: HttpService = {
+  case Request("POST", "/hola", name) => 
+    Future.successful(Response(200, s"¡Hola, $name!"))
+}
+val monolith: HttpService = helloWorld orElse holaMundo
+```
+
+### But we said it was partial and Scala said it was total
+
+```tut:silent
+val german = Request("POST", "/hallo", "one")
+```
+
+```tut:fail
+asyncAssert(404, monolith(german).map(_.status))
+```
+
+---
+
+## Version 0.0.4
+
+An HTTP service is just a function from a request to a response in an
+option of a future.
+
+```tut:silent
+type HttpService = Request => Option[Future[Response]]
+```
+
+### Sugar
+
+```tut:silent
+object HttpService {
+  def apply(pf: PartialFunction[Request, Future[Response]]) = pf.lift
+}
+```
+
+---
+
+## Combining services, v0.0.4
+
+```tut:silent
+val helloWorld: HttpService = HttpService {
+  case Request("POST", "/hello", name) => 
+    Future.successful(Response(200, s"Hello, $name!"))
+}
+val holaMundo: HttpService = HttpService {
+  case Request("POST", "/hola", name) => 
+    Future.successful(Response(200, s"¡Hola, $name!"))
+}
+val monolith: HttpService = 
+  (Function.unlift(helloWorld) orElse Function.unlift(holaMundo)).lift
+```
+
+---
+
+## Combining services, v0.0.4
+
+```tut:silent
+val helloWorld: HttpService = HttpService {
+  case Request("POST", "/hello", name) => 
+    Future.successful(Response(200, s"Hello, $name!"))
+}
+val holaMundo: HttpService = HttpService {
+  case Request("POST", "/hola", name) => 
+    Future.successful(Response(200, s"¡Hola, $name!"))
+}
+val monolith: HttpService = 
+  (Function.unlift(helloWorld) orElse Function.unlift(holaMundo)).lift
+```
+
+### Unit test
+
+```tut:silent
+def req(path: String) = Request("POST", path, "Indy")
+```
+
+```tut
+asyncAssert(200, monolith(req("/hello")).getOrElse(NotFoundF).map(_.status))
+asyncAssert(200, monolith(req("/hola")).getOrElse(NotFoundF).map(_.status))
+asyncAssert(404, monolith(req("/hallo")).getOrElse(NotFoundF).map(_.status))
+```
+
+---
+
+## Async routing
+
+```tut:silent
+def imageServer(fetch: String => Future[Option[Image]]) = HttpService {
+  case Request("GET", path, _) =>
+    fetch(path).map {
+      case Some(image) => Response(200, image)
+      case None => Response(404, "Image Not Found")
+    }
+}
+val svc = (Function.unlift(imageServer(Cache.fetch))
+  orElse Function.unlift(imageServer(Archive.fetch))).lift
+```
+
+---
+
+## Image server
+
+```tut:silent
+def imageServer(fetch: String => Future[Option[Image]]) = HttpService {
+  case Request("GET", path, _) =>
+    fetch(path).map {
+      case Some(image) => Response(200, image)
+      case None => Response(404, "Image Not Found")
+    }
+}
+val svc = (Function.unlift(imageServer(Cache.fetch))
+  orElse Function.unlift(imageServer(Archive.fetch))).lift
+```
+
+### Unit test
+
+```tut
+asyncAssert(false, Cache.fetch("/zoidberg.png").map(_.isDefined))
+asyncAssert(true, Archive.fetch("/zoidberg.png").map(_.isDefined))
+asyncAssert(200, svc(Request("GET", "/zoidberg.png", "")).getOrElse(NotFoundF).map(_.status))
+```
+
+---
+
+## Version 0.0.5
+
+An HTTP service is just a function from a request to a response in a
+future of an option.
+
+```tut:silent
+type HttpService = Request => Future[Option[Response]]
+```
+
+### Sugar
+
+```tut:silent
+import cats.implicits._
+object HttpService {
+  def apply(pf: PartialFunction[Request, Future[Response]]): HttpService = 
+    pf.lift.andThen(_.sequence)
+}
+val NotFound = Response(404, "😿")
+```
+
+---
+
+## Image server, v0.0.5
+
+```tut:silent
+def imageServer(fetch: String => Future[Option[Image]]): HttpService = {
+  case Request("GET", path, _) => fetch(path).map(_.map(Response(200, _)))
+  case _ => Future.successful(None)
+}
+val svc: HttpService = req => imageServer(Cache.fetch)(req).flatMap {
+  case some @ Some(resp) => Future.successful(some)
+  case None => imageServer(Archive.fetch)(req)
+}
+```
+
+---
+
+## Image server, v0.0.5
+
+```tut:silent
+def imageServer(fetch: String => Future[Option[Image]]): HttpService = {
+  case Request("GET", path, _) => fetch(path).map(_.map(Response(200, _)))
+  case _ => Future.successful(None)
+}
+val svc: HttpService = req => imageServer(Cache.fetch)(req).flatMap {
+  case some @ Some(resp) => Future.successful(some)
+  case None => imageServer(Archive.fetch)(req)
+}
+```
+
+### Unit test
+
+```tut
+asyncAssert(false, Cache.fetch("/zoidberg.png").map(_.isDefined))
+asyncAssert(true, Archive.fetch("/zoidberg.png").map(_.isDefined))
+asyncAssert(200, svc(Request("GET", "/zoidberg.png", ""))
+  .map(_.getOrElse(NotFound)).map(_.status))
+```
+
+---
+
+## Version 0.0.6
+
+An HTTP service is just a function from a request to a response in the
+option monad transformer applied to Future.
+
+```tut:silent
+import cats.data.OptionT
+type HttpService = Request => OptionT[Future, Response]
+```
+
+### Sugar
+
+```tut:silent
+object HttpService {
+  def apply(pf: PartialFunction[Request, Future[Response]]): HttpService = 
+    pf.lift andThen { optF => OptionT(optF.sequence) }
+}
+```
+
+---
+
+## Image server, v0.0.6
+
+```tut:silent
+def imageServer(fetch: String => OptionT[Future, Image]): HttpService = {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = { req => 
+  imageServer(Cache.fetchT)(req) orElse imageServer(Archive.fetchT)(req) }
+```
+
+---
+
+## Image server, v0.0.6
+
+```tut:silent
+def imageServer(fetch: String => OptionT[Future, Image]): HttpService = {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = { req => 
+  imageServer(Cache.fetchT)(req) orElse imageServer(Archive.fetchT)(req) }
+```
+
+### Unit test
+
+```tut
+asyncAssert(false, Cache.fetchT("/zoidberg.png").isDefined)
+asyncAssert(true, Archive.fetchT("/zoidberg.png").isDefined)
+asyncAssert(200, svc(Request("GET", "/zoidberg.png", ""))
+  .fold(404)(_.status))
+```
+
+---
+
+## Version 0.0.7
+
+An HTTP service is just a Kleisli arrow from a request to a response
+in the option monad transformer applied to Future.
+
+```tut:silent
+import cats.data.{Kleisli, OptionT}
+import cats.implicits._
+type HttpService = Kleisli[OptionT[Future, ?], Request, Response]
+```
+
+---
+
+## Image server, v0.0.7
+
+```tut:silent
+def imageServer(fetch: String => OptionT[Future, Image]): HttpService = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = imageServer(Cache.fetchT) <+> imageServer(Archive.fetchT)
+```
+
+---
+
+## Image server, v0.0.7
+
+```tut:silent
+def imageServer(fetch: String => OptionT[Future, Image]): HttpService = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = imageServer(Cache.fetchT) <+> imageServer(Archive.fetchT)
+```
+
+### Unit test
+
+```tut
+asyncAssert(false, Cache.fetchT("/zoidberg.png").isDefined)
+asyncAssert(true, Archive.fetchT("/zoidberg.png").isDefined)
+asyncAssert(200, svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status))
+```
+
+---
+
+## Image server, v0.0.7, with logging
+
+```tut:silent
+def imageServer(fetch: String => OptionT[Future, Image]): HttpService = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = imageServer(Cache.lfetchT) <+> imageServer(Archive.lfetchT)
+```
+
+### Oops
+
+```tut:book
+svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status)
+```
+
+![I'm going for a scuttle](http://i.imgur.com/Hu20yUC.gif)
+
+---
+
+## Version 0.0.8
+
+An HTTP service is just a Kleisli arrow from a request to a response
+in the option monad transformer applied to IO.
+
+```tut:silent
+import cats.data.{Kleisli, OptionT}
+import cats.effect.IO
+import cats.implicits._
+type HttpService = Kleisli[OptionT[IO, ?], Request, Response]
+```
+
+---
+
+## Image server, v0.0.8
+
+```tut:silent
+def imageServer(fetch: String => OptionT[IO, Image]): HttpService = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = imageServer(Cache.lfetch[IO]) <+> imageServer(Archive.lfetch[IO])
+```
+
+---
+
+## Image server, v0.0.8
+
+```tut:silent
+def imageServer(fetch: String => OptionT[IO, Image]): HttpService = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = imageServer(Cache.lfetch[IO]) <+> imageServer(Archive.lfetch[IO])
 ```
 
 ```tut:book
-val fooInt = FooInt(5)
-val fooString = FooString("Hello World")
+svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status)
+```
 
-val foos = List(fooInt, fooString)
+---
+
+## Image server, v0.0.8
+
+```tut:silent
+def imageServer(fetch: String => OptionT[IO, Image]): HttpService = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+val svc: HttpService = imageServer(Cache.lfetch[IO]) <+> imageServer(Archive.lfetch[IO])
+```
+
+```tut:book
+svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status).unsafeRunSync
+```
+
+---
+class: center, middle
+
+![Why not Monix?](https://i.imgflip.com/25qxo7.jpg)
+
+---
+
+## Version 0.0.9
+
+An HTTP service is just a Kleisli arrow from a request to a response
+in the option monad transformer applied to an arbitrary effect.
+
+```tut:silent
+import cats.Applicative, cats.data.{Kleisli, OptionT}, cats.implicits._
+type HttpService[F[_]] = Kleisli[OptionT[F, ?], Request, Response]
+
+object HttpService {
+  def apply[F[_]: Applicative](pf: PartialFunction[Request, F[Response]]): HttpService[F] =
+    Kleisli(pf.lift.andThen(_.sequence).andThen(OptionT.apply))
+}
+```
+
+---
+
+## Image server, v0.0.9
+
+```tut:silent
+import cats.effect.Sync, monix.eval.Task, monix.execution.Scheduler.Implicits.global
+def imageServer[F[_]: Sync](fetch: String => OptionT[F, Image]): HttpService[F] = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+def svc[F[_]: Sync] = imageServer[F](Cache.lfetch[F]) <+> imageServer(Archive.lfetch[F])
+```
+
+### Bring your own effect
+
+```tut:book
+svc[IO].run(Request("GET", "/zoidberg.png", "")).
+  fold(404)(_.status).unsafeRunSync
+svc[Task].run(Request("GET", "/zoidberg.png", "")).
+  fold(404)(_.status).foreach(println)
+```
+
+---
+
+## Image server, v0.0.9
+
+```tut:silent
+import cats.effect.Sync, monix.eval.Task, monix.execution.Scheduler.Implicits.global
+def imageServer[F[_]: Sync](fetch: String => OptionT[F, Image]): HttpService[F] = Kleisli {
+  case Request("GET", path, _) => fetch(path).map(Response(200, _))
+  case _ => OptionT.none
+}
+def svc[F[_]: Sync] = imageServer[F](Cache.lfetch[F]) <+> imageServer(Archive.lfetch[F])
+```
+
+### But not Future 
+
+```tut:fail
+svc[Future].run(Request("GET", "/zoidberg.png", "")).fold(404)(_.status)
+```
+
+---
+
+## Translation, v0.0.9
+
+```tut:silent
+def svc[F[_]: Sync](translate: String => F[String]): HttpService[F] = HttpService {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val xlate = svc(Translator.get[IO](English, Spanish))
+```
+
+---
+
+## Translation, v0.0.9
+
+```tut:silent
+def svc[F[_]: Sync](translate: String => F[String]): HttpService[F] = HttpService {
+  case Request("POST", "/translate", name) =>
+    translate(name).map(Response(200, _))
+}
+val xlate = svc(Translator.get[IO](English, Spanish))
+```
+
+```tut:invisible
+import Poems._
+```
+
+```tut
+xlate.run(Request("POST", "/translate", PaulReveresRide)).fold("")(_.body).unsafeRunSync
+```
+
+---
+
+## Version 0.0.10
+
+An HTTP service is just a Kleisli arrow from a streaming request to a
+streaming response in the option monad transformer applied to an
+arbitrary effect.
+
+```tut:silent
+import fs2.Stream
+case class Request[F[_]](
+  method: String,
+  uri: String,
+  body: Stream[F, Byte],
+)
+case class Response[F[_]](
+  status: Int, 
+  body: Stream[F, Byte],
+)
+type HttpService[F[_]] = Kleisli[OptionT[F, ?], Request[F], Response[F]]
+```
+
+```tut:invisible
+object HttpService {
+  def apply[F[_]: Applicative](pf: PartialFunction[Request[F], F[Response[F]]]): HttpService[F] =
+    Kleisli(pf.lift.andThen(_.sequence).andThen(OptionT.apply))
+}
+```
+
+---
+
+## Translation, v0.0.10
+
+```tut:silent
+import fs2.{Pipe, Stream}, fs2.text._
+def svc[F[_]: Sync](translate: Pipe[F, String, String]): HttpService[F] = 
+  HttpService {
+    case Request("POST", "/translate", body) =>
+      val xlated = translate(body.through(utf8Decode))
+        .through(utf8Encode)
+      Sync[F].pure(Response(200, xlated))
+  }
+val xlate = svc(Translator.streaming[IO](English, Spanish))
+```
+
+---
+
+## Consume the streaming endpoint, v0.0.10
+
+```tut
+(Stream.eval(xlate(Request("POST", "/translate", PaulReveresStream)).value)
+   .unNoneTerminate          // strip away the option
+   .flatMap(_.body)          // just the body
+   .through(utf8Decode)      // bytes to Strings
+   .take(5)                  // take the first 5
+   .compile.toList           // Stream[F,String] => F[List[String]]
+   .map(_.mkString("\n"))    // join lines together
+   .unsafeRunSync)           // the end of the world
+```
+
+---
+
+## PureConfig
+
+```tut:book
+import pureconfig._, pureconfig.module.catseffect._
+
+case class DbConf(url: String, username: String, password: String)
+val config = loadConfigF[IO, DbConf]
+```
+
+---
+
+## Doobie
+
+```tut:book
+import doobie._, doobie.implicits._, doobie.h2._
+def xa(conf: DbConf): IO[Transactor[IO]] = 
+  H2Transactor.newH2Transactor[IO](conf.url, conf.username, conf.password)
+def numbers(xa: Transactor[IO]): Stream[IO, (Int, String)] =
+  sql"select id, en from numbers order by id".query[(Int, String)].stream.transact(xa)
+```
+
+---
+
+## jawn-fs2
+
+```tut:silent
+import fs2.Chunk
+import _root_.io.circe.Json
+import _root_.io.circe.jawn.CirceSupportParser.facade
+import jawnfs2._
+```
+
+```tut:book
+Stream.emit("""{"one":1}\n{"two":2}\n{"three":3}\n""").
+  covary[IO].
+  through(parseJsonStream[IO, String, Json]).
+  evalMap(s => IO(println(s))).
+  compile.drain
+```
+
+---
+
+## A real http4s service
+
+```tut:silent
+import io.circe.syntax._
+import org.http4s._, org.http4s.circe._
+
+def svc(xa: Transactor[IO]): HttpService[IO] = 
+  HttpService[IO] {
+    case req =>
+      val nums = numbers(xa).map { case (i, n) =>
+        Json.obj("int" -> i.asJson, "name" -> n.asJson).asJson
+      }
+      Response(Status.Ok).withBody(nums)
+  }
+```
+
+---
+
+## All together now
+
+```tut:invisible
+import org.http4s.Method._
+import org.http4s.Uri.uri
+import org.http4s.client._
+import org.http4s.client.dsl.io._
+import org.http4s.client.blaze._
+import org.http4s.server.blaze._
+```
+
+```tut:silent
+def parseResponse(resp: Response[IO]): IO[List[Json]] = {
+  resp.body.chunks.parseJsonStream
+    .compile.toList
+}
+
+val prog = for {
+  c      <- config
+  xa     <- H2Transactor.newH2Transactor[IO](c.url, c.username, c.password)
+  _      <- DoobieExample.setUp(xa)
+  server <- BlazeBuilder[IO].mountService(svc(xa)).bindHttp(8080).start
+  client <- Http1Client[IO]()
+  req    <- GET(uri("http://localhost:8080/"))
+  nums   <- client.fetch(req)(resp => parseResponse(resp))
+  _      <- client.shutdown
+  _      <- server.shutdown
+} yield nums
+```
+
+```tut
+prog.unsafeRunSync()
 ```
 
 ---
@@ -71,10 +1041,6 @@ class: center, middle
 Code and slides at `rossabaker/boston-http4s` on GitHub
 
 ## Questions?
-
-
-
-
 
  </textarea>
     <script src="remark-latest.min.js">
