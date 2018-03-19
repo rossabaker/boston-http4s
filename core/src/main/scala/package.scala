@@ -1,37 +1,30 @@
-/* Sloppy code full of stubs so the slide deck compiles
- * and looks like it's doing real work.
- * 
- * Generally not to be emulated.
- */
+import scala.concurrent.ExecutionContext
 
-package com.rossabaker.talks.tls2018
+import fs2._
 
-import cats._
-import cats.effect._
-import cats.data.OptionT
-import fs2.Stream
-import scala.concurrent.Future
+package object boston2018 {
+  def assert(a: Any, b: Any): Unit = {
+    if (a == b)
+      println(s"✔ $a")
+    else {
+      println(s"❌ Expected: $a")
+      println(s"❌ Actual  : $b")
+    }
+  }
 
-sealed trait Language
-case object English extends Language
-case object Spanish extends Language
+  def asyncAssert(a: Any, bf: scala.concurrent.Future[Any]): Unit = {
+    import scala.concurrent._
+    import scala.concurrent.duration._
+    val b = Await.result(bf, 3.seconds)
+    assert(a, b)
+  }
 
-object Translator {
-  def apply(from: Language, to: Language)(s: String): Future[String] =
-    Future.successful {
-      s match {
-        case "one" => "uno"
-      }
+  implicit val ec: ExecutionContext =
+    new ExecutionContext {
+      def execute(task: Runnable) = task.run()
+      def reportFailure(t: Throwable) = ExecutionContext.defaultReporter(t)
     }
 
-  def get[F[_]](from: Language, to: Language)(s: String)(implicit F: Applicative[F]): F[String] =
-    F.pure(Poems.PaulReverseRideEs)
-
-  def streaming[F[_]](from: Language, to: Language)(s: Stream[F, String])(implicit F: Applicative[F]): Stream[F, String] =
-    Stream.emit(Poems.PaulReverseRideEs).through(fs2.text.lines)
-}
-
-object Poems {
   val PaulReveresRide = """
 Listen, my children, and you shall hear
 Of the midnight ride of Paul Revere,
@@ -325,79 +318,5 @@ En la hora de la oscuridad, el peligro y la necesidad,
 La gente se despertará y escuchará
 Los apresurados cascos de ese corcel,
 Y el mensaje de medianoche de Paul Revere.
-"""
-}
-
-
-object Archive {
-  def fetch(path: String): Future[Option[Image]] =
-    Future.successful {
-      path match {
-        case "/zoidberg.png" => Some("lobster.png")
-        case _ => None
-      }
-    }
-
-  def fetchT(path: String): OptionT[Future, Image] =
-    OptionT(fetch(path))
-
-  def lfetchT(path: String): OptionT[Future, Image] =
-    OptionT(Future.successful {
-      path match {
-        case "/zoidberg.png" =>
-          println("Found in archive")
-          Some("lobster.png")
-        case _ =>
-          println("Not in archive")
-          None
-      }
-    })
-
-  def lfetch[F[_]: Sync](path: String): OptionT[F, Image] =
-    OptionT(Sync[F].delay {
-      path match {
-        case "/zoidberg.png" =>
-          println("Found in archive")
-          Some("lobster.png")
-        case _ =>
-          println("Not in archive")
-          None
-      }
-    })
-}
-
-object Cache {
-  def fetch(path: String): Future[Option[Image]] =
-    Future.successful {
-      path match {
-        case _ => None
-      }
-    }
-
-  def fetchT(path: String): OptionT[Future, Image] =
-    OptionT(fetch(path))
-
-  def lfetchT(path: String): OptionT[Future, Image] =
-    OptionT(Future.successful {
-      path match {
-        case "/zoidberg.png" =>
-          println("Found in cache")
-          Some("lobster.png")
-        case _ =>
-          println("Not in cache")
-          None
-      }
-    })
-
-  def lfetch[F[_]: Sync](path: String): OptionT[F, Image] =
-    OptionT(Sync[F].delay {
-      path match {
-        case "/zoidberg.png" =>
-          println("Found in cache")
-          Some("lobster.png")
-        case _ =>
-          println("Not in cache")
-          None
-      }
-    })
+"""  
 }

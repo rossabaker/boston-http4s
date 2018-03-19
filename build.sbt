@@ -38,7 +38,8 @@ lazy val core = project
       "org.tpolecat" %% "doobie-h2" % "0.5.1",
       "com.github.pureconfig" %% "pureconfig-cats-effect" % "0.9.0",
       "com.ccadllc.cedi" %% "dtrace-logging" % "1.2.0",
-      "io.circe" %% "circe-jawn" % "0.9.1",          
+      "io.circe" %% "circe-jawn" % "0.9.1",
+      "io.circe" %% "circe-literal" % "0.9.1",                
       "io.monix" %% "monix-eval" % "3.0.0-M3"      
     ))
 

@@ -1,4 +1,4 @@
-package com.rossabaker.talks.tls2018
+package boston2018
 
 import cats.effect.IO
 import cats.implicits._

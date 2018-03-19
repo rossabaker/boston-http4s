@@ -14,20 +14,36 @@
         font-weight: normal;
       }
       .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono', 'Consolas', 'Courier New'; }
-    </style>
+      
+      .column:first-of-type {float:left}
+      .column:last-of-type {float:right}
+
+      .split-40 .column:first-of-type {width: 40%}
+      .split-40 .column:last-of-type {width: 60%}    </style>
   </head>
   <body>
     <textarea id="source">
 
 ```tut:invisible
-import com.rossabaker.talks.tls2018._
+import boston2018._
+import cats._
+import cats.data._
+import cats.effect._
+import cats.implicits._
+import monix.eval.Task
+import monix.execution.Scheduler
+import scala.concurrent._
+import scala.concurrent.duration._
 ```
 
+---
 class: center, middle
 
-# An HTTP service is just a Kleisli arrow from a streaming request to a streaming response in the option monad transformer applied to an arbitrary effect. What's the problem?
+# HTTP applications are just a Kleisli function from a streaming request to a polymorphic effect of a streaming response.
 
-Ross A. Baker • [`@rossabaker`](https://twitter.com/rossabaker)
+## So what's the problem?
+
+Ross A. Baker • [`@rossabaker`](https://twitter.com/rossabaker) • [Formation](http://formation.ai/careers)
 
 ???
 - notes here
@@ -35,72 +51,65 @@ Ross A. Baker • [`@rossabaker`](https://twitter.com/rossabaker)
 
 ---
 
-## Intro
+## Who am I?
 
 - 2009: began writing Scala
-- 2010: helped start IndyScala meetup
-- 2011: lost source code to Scala 2.8 app, still running
+- 2010: helped start [IndyScala](https://github.com/indyscala/) meetup
+- 2011: lost source code to Scala 2.8 app, still running today
 - 2012: began writing Scala professionally
-- 2013: started http4s project
-- 2014-2017: got increasingly functional
-- 2018: started writing Scala and Haskell at Formation
+- 2013: started [http4s](http://http4s.org/) project
+- 2014: got more functional
+- 2015: got more functional
+- 2016: got more functional
+- 2017: got more functional
+- 2018: started writing Scala and Haskell at [Formation](http://formation.ai)
 
 ---
 
-```tut:invisible
-def assert(a: Any, b: Any) = {
-  if (a == b)
-    println(s"✔ $a")
-  else {
-    println(s"❌ Expected: $a")
-    println(s"❌ Actual  : $b")
-  }
-}
+## What is http4s?
 
-def asyncAssert(a: Any, bf: scala.concurrent.Future[Any]) = {
-  import scala.concurrent._
-  import scala.concurrent.duration._
-  val b = Await.result(bf, 3.seconds)
-  assert(a, b)
-}
-
-implicit val synchronousExecutionContext = 
-  scala.concurrent.ExecutionContext.fromExecutor(
-    new java.util.concurrent.Executor {
-      def execute(task: Runnable) = task.run()
-    })
-```
-
-# HTTP services
-
-```tut:silent
-import cats.data.{Kleisli, OptionT}
-
-trait Request[F[_]]
-trait Response[F[_]]
-type HttpService[F[_]] = Kleisli[OptionT[F, ?], Request[F], Response[F]]
-```
+- Inspired by:
+   - Java's [servlets](https://docs.oracle.com/javaee/6/tutorial/doc/bnafd.html)
+   - Clojure's [Ring](https://github.com/ring-clojure/ring/blob/master/SPEC)
+   - Ruby's [Rack](https://rack.github.io/)
+   - Python's [WSGI](http://wsgi.readthedocs.io/en/latest/)
+   - Haskell's [WAI](https://hackage.haskell.org/package/wai)
+- Multiple frontends:
+   - http4s-dsl
+   - [rho](https://github.com/http4s/rho)
+   - pure functions
+- Backends
+   - Server
+      - [blaze](https://github.com/http4s/blaze)
+      - Jetty
+      - Tomcat
+   - Client
+      - blaze
+      - async-http-client
 
 ---
 
 ## Version 0.0.1
 
+An HTTP application is just a function from a request to a response.
+
 ```tut:silent
 case class Request(
-  method: String,
-  uri: String,
-  body: String,
+  method: Method,
+  uri: Uri,
+  // headers,
+  // httpVersion,
+  body: String = "",
 )
+
 case class Response(
-  status: Int, 
-  body: String,
+  status: Status,
+  // headers,
+  // httpVersion,
+  body: String = "",
 )
-```
 
-An HTTP service is just a function from a request to a response.
-
-```tut:silent
-type HttpService = Request => Response
+type HttpApp = Request => Response
 ```
 
 ---
@@ -108,34 +117,32 @@ type HttpService = Request => Response
 ## Hello World
 
 ```tut:silent
-val helloWorld: HttpService = {
-  case Request("POST", "/hello", name) =>
-    Response(200, s"Hello, $name!")
+val helloWorld: HttpApp = {
+  case Request(POST, Uri("/hello"), name) =>
+    Response(OK, s"Hello, $name!")
+  case _ => 
+    Response(NotFound)
 }
 ```
-```tut:invisible
-def loadTest(svc: HttpService) = println("😎" * 7)
-```
 
 ---
 
 ## Hello World
 
 ```tut:silent
-val helloWorld: HttpService = {
-  case Request("POST", "/hello", name) =>
-    Response(200, s"Hello, $name!")
+val helloWorld: HttpApp = {
+  case Request(POST, Uri("/hello"), name) =>
+    Response(OK, s"Hello, $name!")
+  case _ => 
+    Response(NotFound)
 }
 ```
 
 ### Unit test
 
-```tut:silent
-val req = Request("POST", "/hello", "Indy")
-```
-
-```tut
-assert("Hello, Indy!", helloWorld(req).body)
+```tut:book
+val req = Request(POST, Uri("/hello"), "Boston")
+assert("Hello, Boston!", helloWorld(req).body)
 ```
 
 ---
@@ -143,804 +150,1010 @@ assert("Hello, Indy!", helloWorld(req).body)
 ## Hello World
 
 ```tut:silent
-val helloWorld: HttpService = {
-  case Request("POST", "/hello", name) =>
-    Response(200, s"Hello, $name!")
+val helloWorld: HttpApp = {
+  case Request(POST, Uri("/hello"), name) =>
+    Response(OK, s"Hello, $name!")
+  case _ => 
+    Response(NotFound)
 }
 ```
 
 ### Load test
 
-```tut
+```tut:invisible
+def loadTest(app: HttpApp) = println("😎" * 7)
+```
+```tut:book
 loadTest(helloWorld)
 ```
 
 ---
 
-## Async backend
+## Async
 
 ```tut:silent
-import scala.concurrent._, duration._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    val resp = translate(name).map(Response(200, _))
+val app: HttpApp = {
+  case Request(POST, Uri("/translate"), text) =>
+    val resp = Translator.future(text).map(Response(OK, _))
     Await.result(resp, 3.seconds)
+  case _ =>
+    Response(NotFound)
 }
-val englishToSpanish = svc(Translator(English, Spanish))
 ```
 
 ---
 
-## Async backend
+## Async
 
 ```tut:silent
-import scala.concurrent._, duration._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    val resp = translate(name).map(Response(200, _))
+val app: HttpApp = {
+  case Request(POST, Uri("/translate"), text) =>
+    val resp = Translator.future(text).map(Response(OK, _))
     Await.result(resp, 3.seconds)
+  case _ =>
+    Response(NotFound)
 }
-val englishToSpanish = svc(Translator(English, Spanish))
 ```
 
 ### Unit test
 
-```tut:silent
-val req = Request("POST", "/translate", "one")
-```
-
-```tut
-assert("uno", englishToSpanish(req).body)
+```tut:book
+val req = Request(POST, Uri("/translate"), "one")
+assert("uno", app(req).body)
 ```
 
 ---
 
-## Async backend
+## Async
 
 ```tut:silent
-import scala.concurrent._, duration._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    val resp = translate(name).map(Response(200, _))
+val app: HttpApp = {
+  case Request(POST, Uri("/translate"), text) =>
+    val resp = Translator.future(text).map(Response(OK, _))
     Await.result(resp, 3.seconds)
+  case _ =>
+    Response(NotFound)
 }
-val englishToSpanish = svc(Translator(English, Spanish))
 ```
 
 ### Load test
 
 ```tut:invisible
-def loadTest(svc: HttpService) = {}
+def loadTest(app: HttpApp) = "Await is bad and you should feel bad."
 ```
 
-```tut
-loadTest(englishToSpanish)
+```tut:book
+loadTest(app)
 ```
-
-<center>
-<img src="https://i.imgflip.com/25pa35.jpg" alt="Await is bad and you should feel bad" style="height: 165px;"/>
-</center>
 
 ---
 
 ## Version 0.0.2
 
-An HTTP service is just a function from a request to a response in a
-future.
+An HTTP application is just a function from a request to a future response.
 
 ```tut:silent
-type HttpService = Request => Future[Response]
+type HttpApp = Request => Future[Response]
 ```
 
 ---
 
-## Async backend, v0.0.2
+## Async
 
 ```tut:silent
-import scala.concurrent._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
+val app: HttpApp = {
+  case Request(POST, Uri("/translate"), text) =>
+    Translator.future(text).map(Response(OK, _))
+  case _ =>
+    Future.successful(Response(NotFound))
 }
-val englishToSpanish = svc(Translator(English, Spanish))
 ```
 
 ---
 
-## Async backend, v0.0.2
+## Async
 
 ```tut:silent
-import scala.concurrent._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
+val app: HttpApp = {
+  case Request(POST, Uri("/translate"), text) =>
+    Translator.future(text).map(Response(OK, _))
+  case _ =>
+    Future.successful(Response(NotFound))
 }
-val englishToSpanish = svc(Translator(English, Spanish))
 ```
 
 ### Unit test
 
-```tut:silent
-val req = Request("POST", "/translate", "one")
-```
-
-```tut
-asyncAssert("uno", englishToSpanish(req).map(_.body))
+```tut:book
+val req = Request(POST, Uri("/translate"), "one")
+asyncAssert("uno", app(req).map(_.body))
 ```
 
 ---
 
-## Async backend, v0.0.2
+## Async
 
 ```tut:silent
-import scala.concurrent._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
+val app: HttpApp = {
+  case Request(POST, Uri("/translate"), text) =>
+    Translator.future(text).map(Response(OK, _))
+  case _ =>
+    Future.successful(Response(NotFound))
 }
-val englishToSpanish = svc(Translator(English, Spanish))
 ```
 
 ### Load test
 
 ```tut:invisible
-def loadTest(svc: HttpService) = "✨✨✨ IT'S REACTIVE ✨✨✨"
+def loadTest(app: HttpApp) = "✨✨✨ IT'S REACTIVE ✨✨✨"
 ```
 
-```tut
-loadTest(englishToSpanish)
+```tut:book
+loadTest(app)
 ```
 
 ---
 
-## Async backend, v0.0.2
+## Combination
 
 ```tut:silent
-import scala.concurrent._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
+def combine(x: HttpApp, y: HttpApp): HttpApp = { req =>
+  try x(req)
+  catch { case e: MatchError => y(req) }
 }
-val englishToSpanish = svc(Translator(English, Spanish))
+
+val helloWorld: HttpApp = {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
+}
+val holaMundo: HttpApp = {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
+}
+
+val app: HttpApp = combine(helloWorld, holaMundo)
 ```
 
-### But we said it was total and gave it a partial
+---
+
+## Combination
 
 ```tut:silent
-val req = Request("POST", "/traducir", "one")
+def combine(x: HttpApp, y: HttpApp): HttpApp = { req =>
+  try x(req)
+  catch { case e: MatchError => y(req) }
+}
+
+val helloWorld: HttpApp = {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
+}
+val holaMundo: HttpApp = {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
+}
+
+val app: HttpApp = combine(helloWorld, holaMundo)
 ```
 
-```tut:fail
-asyncAssert("uno", englishToSpanish(req).map(_.body))
+### Unit test
+
+```tut:book
+val req = Request(POST, Uri("/hello"), "Boston")
+asyncAssert("Hello, Boston!", app(req).map(_.body))
+```
+
+---
+
+## Combination
+
+```tut:silent
+def combine(x: HttpApp, y: HttpApp): HttpApp = { req =>
+  try x(req)
+  catch { case e: MatchError => y(req) }
+}
+
+val helloWorld: HttpApp = {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
+}
+val holaMundo: HttpApp = {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
+}
+
+val app: HttpApp = combine(helloWorld, holaMundo)
+```
+
+### Unit test
+
+```tut:book
+val req = Request(POST, Uri("/hola"), "Boston")
+asyncAssert("¡Hola, Boston!", app(req).map(_.body))
 ```
 
 ---
 
 ## Version 0.0.3
 
-An HTTP service is just a partial function from a request to a
-response in a future.
-
+An HTTP application is just a function from a request to a future response.
 
 ```tut:silent
-type HttpService = PartialFunction[Request, Future[Response]]
+type HttpApp = Request => Future[Response]
+```
 
-val NotFoundF = Future.successful(Response(404, "😿"))
+HTTP routes are just a partial function from a request to a future response.
+
+```tut:silent
+type HttpRoutes = PartialFunction[Request, Future[Response]]
 ```
 
 ---
 
-## Async backend, v0.0.3
+## Combination
 
 ```tut:silent
-import scala.concurrent._
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
+def combine(x: HttpRoutes, y: HttpRoutes): HttpRoutes = x orElse y
+
+val helloWorld: HttpRoutes = {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
-val englishToSpanish = svc(Translator(English, Spanish))
+val holaMundo: HttpRoutes = {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
+}
+
+val app: HttpApp = combine(helloWorld, holaMundo)
 ```
 
 ---
 
-## Async backend, v0.0.3
+## Combination
 
 ```tut:silent
-def svc(translate: String => Future[String]): HttpService = {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
+def combine(x: HttpRoutes, y: HttpRoutes): HttpRoutes = x orElse y
+
+val helloWorld: HttpRoutes = {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
-val englishToSpanish = svc(Translator(English, Spanish))
+val holaMundo: HttpRoutes = {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
+}
+
+val app: HttpApp = combine(helloWorld, holaMundo)
 ```
 
 ### Unit test
 
-```tut:silent
-val good = Request("POST", "/translate", "one")
-val bad = Request("POST", "/traducir", "one")
+```tut:book
+val req = Request(POST, Uri("/guten-tag"), "Boston")
 ```
 
-```tut
-asyncAssert(200, englishToSpanish.applyOrElse(good, 
-  Function.const(NotFoundF)).map(_.status))
-asyncAssert(404, englishToSpanish.applyOrElse(bad, 
-  Function.const(NotFoundF)).map(_.status))
-```
-
----
-
-## Combining services with `orElse`
-
-```tut:silent
-val helloWorld: HttpService = {
-  case Request("POST", "/hello", name) => 
-    Future.successful(Response(200, s"Hello, $name!"))
-}
-val holaMundo: HttpService = {
-  case Request("POST", "/hola", name) => 
-    Future.successful(Response(200, s"¡Hola, $name!"))
-}
-val monolith: HttpService = helloWorld orElse holaMundo
-```
-
----
-
-## Combining services with `orElse`
-
-```tut:silent
-val helloWorld: HttpService = {
-  case Request("POST", "/hello", name) => 
-    Future.successful(Response(200, s"Hello, $name!"))
-}
-val holaMundo: HttpService = {
-  case Request("POST", "/hola", name) => 
-    Future.successful(Response(200, s"¡Hola, $name!"))
-}
-val monolith: HttpService = helloWorld orElse holaMundo
-```
-
-### Unit test
-
-```tut:silent
-import cats.implicits._
-val en = Request("POST", "/hello", "Indy")
-val es = Request("POST", "/hola",  "Indy")
-```
-
-```tut
-asyncAssert("Hello, Indy!", monolith.applyOrElse(en, Function.const(NotFoundF)).map(_.body))
-asyncAssert("¡Hola, Indy!", monolith.applyOrElse(es, Function.const(NotFoundF)).map(_.body))
-```
-
----
-
-## Combining services with `orElse`, v0.0.3
-
-```tut:silent
-val helloWorld: HttpService = {
-  case Request("POST", "/hello", name) => 
-    Future.successful(Response(200, s"Hello, $name!"))
-}
-val holaMundo: HttpService = {
-  case Request("POST", "/hola", name) => 
-    Future.successful(Response(200, s"¡Hola, $name!"))
-}
-val monolith: HttpService = helloWorld orElse holaMundo
-```
-
-### But we said it was partial and Scala said it was total
-
-```tut:silent
-val german = Request("POST", "/hallo", "one")
-```
-
-```tut:fail
-asyncAssert(404, monolith(german).map(_.status))
+```tut:book:fail
+asyncAssert("Guten Tag, Boston!", app(req).map(_.body))
 ```
 
 ---
 
 ## Version 0.0.4
 
-An HTTP service is just a function from a request to a response in an
-option of a future.
+An HTTP application is just a function from a request to a future response.
 
 ```tut:silent
-type HttpService = Request => Option[Future[Response]]
+type HttpApp = Request => Future[Response]
 ```
 
-### Sugar
+HTTP routes are just a function from a request to an optional future response.
 
 ```tut:silent
-object HttpService {
-  def apply(pf: PartialFunction[Request, Future[Response]]) = pf.lift
+type HttpRoutes = Request => Option[Future[Response]]
+object HttpRoutes {
+  def of(pf: PartialFunction[Request, Future[Response]]): HttpRoutes =
+    pf.lift
 }
-```
-
----
-
-## Combining services, v0.0.4
-
-```tut:silent
-val helloWorld: HttpService = HttpService {
-  case Request("POST", "/hello", name) => 
-    Future.successful(Response(200, s"Hello, $name!"))
-}
-val holaMundo: HttpService = HttpService {
-  case Request("POST", "/hola", name) => 
-    Future.successful(Response(200, s"¡Hola, $name!"))
-}
-val monolith: HttpService = 
-  (Function.unlift(helloWorld) orElse Function.unlift(holaMundo)).lift
 ```
 
 ---
 
-## Combining services, v0.0.4
+## Combination
 
 ```tut:silent
-val helloWorld: HttpService = HttpService {
-  case Request("POST", "/hello", name) => 
-    Future.successful(Response(200, s"Hello, $name!"))
+def combine(x: HttpRoutes, y: HttpRoutes): HttpRoutes = 
+  req => x(req).orElse(y(req))
+
+val helloWorld: HttpRoutes = HttpRoutes.of {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
-val holaMundo: HttpService = HttpService {
-  case Request("POST", "/hola", name) => 
-    Future.successful(Response(200, s"¡Hola, $name!"))
+val holaMundo: HttpRoutes = HttpRoutes.of {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
 }
-val monolith: HttpService = 
-  (Function.unlift(helloWorld) orElse Function.unlift(holaMundo)).lift
+```
+
+```tut:book:fail
+val app: HttpApp = combine(helloWorld, holaMundo)
+```
+
+---
+
+## Combination
+
+```tut:silent
+val helloWorld: HttpRoutes = HttpRoutes.of {
+  case Request(POST, Uri("/hello"), name) =>
+    Future.successful(Response(OK, s"Hello, $name!"))
+}
+val holaMundo: HttpRoutes = HttpRoutes.of {
+  case Request(POST, Uri("/hola"), name) =>
+    Future.successful(Response(OK, s"¡Hola, $name!"))
+}
+
+def combine(x: HttpRoutes, y: HttpRoutes): HttpRoutes = 
+  req => x(req).orElse(y(req))
+
+def seal(routes: HttpRoutes): HttpApp =
+  routes.andThen(_.getOrElse(
+    Future.successful(Response(NotFound))))
+
+val app: HttpApp = seal(combine(helloWorld, holaMundo))
 ```
 
 ### Unit test
 
-```tut:silent
-def req(path: String) = Request("POST", path, "Indy")
-```
-
-```tut
-asyncAssert(200, monolith(req("/hello")).getOrElse(NotFoundF).map(_.status))
-asyncAssert(200, monolith(req("/hola")).getOrElse(NotFoundF).map(_.status))
-asyncAssert(404, monolith(req("/hallo")).getOrElse(NotFoundF).map(_.status))
+```tut:book
+val req = Request(POST, Uri("/guten-tag"), "Boston")
+asyncAssert(NotFound, app(req).map(_.status))
 ```
 
 ---
 
-## Async routing
+## Composition
 
 ```tut:silent
-def imageServer(fetch: String => Future[Option[Image]]) = HttpService {
-  case Request("GET", path, _) =>
-    fetch(path).map {
-      case Some(image) => Response(200, image)
-      case None => Response(404, "Image Not Found")
-    }
+def translate(app: HttpApp): HttpApp = {
+  app.andThen(future => for {
+    resp <- future
+    tx <- Translator.future(resp.body)
+  } yield resp.copy(body = tx))}
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
-val svc = (Function.unlift(imageServer(Cache.fetch))
-  orElse Function.unlift(imageServer(Archive.fetch))).lift
+
+val app: HttpApp = translate(seal(hello(Uri("/hola"))))
 ```
 
 ---
 
-## Image server
+## Composition
 
 ```tut:silent
-def imageServer(fetch: String => Future[Option[Image]]) = HttpService {
-  case Request("GET", path, _) =>
-    fetch(path).map {
-      case Some(image) => Response(200, image)
-      case None => Response(404, "Image Not Found")
-    }
+def translate(app: HttpApp): HttpApp = {
+  app.andThen(future => for {
+    resp <- future
+    tx <- Translator.future(resp.body)
+  } yield resp.copy(body = tx))}
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
-val svc = (Function.unlift(imageServer(Cache.fetch))
-  orElse Function.unlift(imageServer(Archive.fetch))).lift
+
+val app: HttpApp = translate(seal(hello(Uri("/hola"))))
 ```
 
 ### Unit test
 
-```tut
-asyncAssert(false, Cache.fetch("/zoidberg.png").map(_.isDefined))
-asyncAssert(true, Archive.fetch("/zoidberg.png").map(_.isDefined))
-asyncAssert(200, svc(Request("GET", "/zoidberg.png", "")).getOrElse(NotFoundF).map(_.status))
+```tut:book
+val req = Request(POST, Uri("/hola"), "Boston")
+asyncAssert("¡Hola, Boston!", app(req).map(_.body))
 ```
+
+---
+
+## Composition
+
+```tut:silent
+def translate(app: HttpApp): HttpApp = {
+  app.andThen(future => for {
+    resp <- future
+    tx <- Translator.future(resp.body)
+  } yield resp.copy(body = tx))}
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Future.successful(Response(OK, s"Hello, $name!"))
+}
+
+val en: HttpRoutes = hello(Uri("/hello"))
+```
+
+```tut:book:fail
+val es: HttpRoutes = translate(hello(Uri("/hola")))
+```
+
+---
+
+## Kleisli
+
+Quoth the [Cats docs](https://typelevel.org/cats/datatypes/kleisli.html):
+
+> Kleisli enables composition of functions that return a monadic
+> value
+
+```scala
+case class Kleisli[F[_], A, B])(run: A => F[B])
+```
+
+> We may also have several functions which depend on some environment
+> and want a nice way to compose these functions to ensure they all
+> receive the same environment.
 
 ---
 
 ## Version 0.0.5
 
-An HTTP service is just a function from a request to a response in a
-future of an option.
+HTTP is just a Kleisli function from a request to a polymorphic effect of a response.
 
 ```tut:silent
-type HttpService = Request => Future[Option[Response]]
+type Http[F[_]] = Kleisli[F, Request, Response]
 ```
 
-### Sugar
+An HTTP application is just HTTP in a future effect.
 
 ```tut:silent
-import cats.implicits._
-object HttpService {
-  def apply(pf: PartialFunction[Request, Future[Response]]): HttpService = 
-    pf.lift.andThen(_.sequence)
+type HttpApp = Http[Future]
+object HttpApp {
+  def apply(f: Request => Future[Response]): HttpApp =
+    Kleisli(f)
 }
-val NotFound = Response(404, "😿")
 ```
 
----
-
-## Image server, v0.0.5
+HTTP routes are just HTTP in an optional future.
 
 ```tut:silent
-def imageServer(fetch: String => Future[Option[Image]]): HttpService = {
-  case Request("GET", path, _) => fetch(path).map(_.map(Response(200, _)))
-  case _ => Future.successful(None)
-}
-val svc: HttpService = req => imageServer(Cache.fetch)(req).flatMap {
-  case some @ Some(resp) => Future.successful(some)
-  case None => imageServer(Archive.fetch)(req)
+case class OptionFuture[A](value: Option[Future[A]])
+type HttpRoutes = Http[OptionFuture]
+object HttpRoutes {
+  def of(pf: PartialFunction[Request, Future[Response]]): HttpRoutes =
+    Kleisli(pf.lift.andThen(OptionFuture(_)))
 }
 ```
 
 ---
 
-## Image server, v0.0.5
+## Polymorphic Composition
 
 ```tut:silent
-def imageServer(fetch: String => Future[Option[Image]]): HttpService = {
-  case Request("GET", path, _) => fetch(path).map(_.map(Response(200, _)))
-  case _ => Future.successful(None)
-}
-val svc: HttpService = req => imageServer(Cache.fetch)(req).flatMap {
-  case some @ Some(resp) => Future.successful(some)
-  case None => imageServer(Archive.fetch)(req)
+def translate[F[_]: Monad](app: Http[F]): Http[F] = for {
+  resp <- app
+  tx <- Kleisli.liftF(Translator[F](resp.body))
+} yield resp.copy(body = tx)
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
 ```
 
-### Unit test
+---
 
-```tut
-asyncAssert(false, Cache.fetch("/zoidberg.png").map(_.isDefined))
-asyncAssert(true, Archive.fetch("/zoidberg.png").map(_.isDefined))
-asyncAssert(200, svc(Request("GET", "/zoidberg.png", ""))
-  .map(_.getOrElse(NotFound)).map(_.status))
+## Polymorphic Composition
+
+```tut:silent
+def translate[F[_]: Monad](app: Http[F]): Http[F] = for {
+  resp <- app
+  tx <- Kleisli.liftF(Translator[F](resp.body))
+} yield resp.copy(body = tx)
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Future.successful(Response(OK, s"Hello, $name!"))
+}
+```
+
+```tut:book:fail
+val es = translate(hello(Uri("/hola")))
 ```
 
 ---
 
 ## Version 0.0.6
 
-An HTTP service is just a function from a request to a response in the
-option monad transformer applied to Future.
+HTTP is just a Kleisli function from a request to a polymorphic effect of a response.
 
 ```tut:silent
-import cats.data.OptionT
-type HttpService = Request => OptionT[Future, Response]
+type Http[F[_]] = Kleisli[F, Request, Response]
 ```
 
-### Sugar
+An HTTP application is just HTTP in a future effect.
 
 ```tut:silent
-object HttpService {
-  def apply(pf: PartialFunction[Request, Future[Response]]): HttpService = 
-    pf.lift andThen { optF => OptionT(optF.sequence) }
+type HttpApp = Http[Future]
+```
+
+HTTP routes are just HTTP in an future option.
+
+```tut:silent
+case class FutureOption[A](value: Future[Option[A]])
+type HttpRoutes = Http[FutureOption]
+object HttpRoutes {
+  def of(pf: PartialFunction[Request, Future[Response]]): HttpRoutes =
+    Kleisli(req => FutureOption(pf.lift(req).sequence))
 }
+
+implicit val monadForFutureOption: Monad[FutureOption] = 
+  new Monad[FutureOption] with StackSafeMonad[FutureOption] {
+    def pure[A](x: A) = FutureOption(Future.successful(Some(x)))
+    def flatMap[A, B](fa: FutureOption[A])(f: A => FutureOption[B]): FutureOption[B] = {
+      FutureOption(fa.value.flatMap {
+        case Some(a) => f(a).value
+        case None => Future.successful(None) })}}
 ```
 
 ---
 
-## Image server, v0.0.6
+## Polymorphic Composition
+
+```tut:invisible
+def seal(routes: HttpRoutes): HttpApp =
+  routes.mapF(_.value.map(_.getOrElse(Response(NotFound))))
+```
 
 ```tut:silent
-def imageServer(fetch: String => OptionT[Future, Image]): HttpService = {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
+def translate[F[_]: Monad](app: Http[F]): Http[F] = for {
+  resp <- app
+  tx <- Kleisli.liftF(Translator[F](resp.body))
+} yield resp.copy(body = tx)
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Future.successful(Response(OK, s"Hello, $name!"))
 }
-val svc: HttpService = { req => 
-  imageServer(Cache.fetchT)(req) orElse imageServer(Archive.fetchT)(req) }
+```
+
+```tut:book
+seal(translate(hello(Uri("/hola")))): HttpApp
+translate(seal(hello(Uri("/hola")))): HttpApp
 ```
 
 ---
 
-## Image server, v0.0.6
+## SemigroupK
+
+Hey, what's this funny thing?
+
+```scala
+private[data] sealed trait KleisliSemigroupK[F[_], A] extends SemigroupK[Kleisli[F, A, ?]] {
+  implicit def F: SemigroupK[F]
+  override def combineK[B](x: Kleisli[F, A, B], y: Kleisli[F, A, B]): Kleisli[F, A, B] =
+    Kleisli(a => F.combineK(x.run(a), y.run(a)))
+}
+```
+
+Quoth the [Cats docs](https://typelevel.org/cats/typeclasses/semigroupk.html)
+
+> `SemigroupK[Option]` operates on `Option` where the inner type is not fully specified and can be anything (i.e. is "universally quantified")... in the case of `Option` the `SemigroupK[Option].combineK` method has no choice but to use the `orElse` method of Option
+
+---
+
+## Combination with SemigroupK
 
 ```tut:silent
-def imageServer(fetch: String => OptionT[Future, Image]): HttpService = {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-val svc: HttpService = { req => 
-  imageServer(Cache.fetchT)(req) orElse imageServer(Archive.fetchT)(req) }
+implicit val SemigroupKForFutureOption: SemigroupK[FutureOption] =
+  new SemigroupK[FutureOption] {
+    def combineK[A](x: FutureOption[A], y: FutureOption[A]): FutureOption[A] =
+      FutureOption(x.value.flatMap {
+        case Some(a) => Future.successful(Some(a))
+        case None => y.value
+      })
+  }
+
+val en: HttpRoutes = hello(Uri("/hello"))
+val es: HttpRoutes = translate(hello(Uri("/hola")))
+val app: HttpApp = seal(en.combineK(es))
+```
+
+---
+
+## Combination with SemigroupK
+
+```tut:silent
+implicit val SemigroupKForFutureOption: SemigroupK[FutureOption] =
+  new SemigroupK[FutureOption] {
+    def combineK[A](x: FutureOption[A], y: FutureOption[A]): FutureOption[A] =
+      FutureOption(x.value.flatMap {
+        case Some(a) => Future.successful(Some(a))
+        case None => y.value
+      })
+  }
+
+val en: HttpRoutes = hello(Uri("/hello"))
+val es: HttpRoutes = translate(hello(Uri("/hola")))
+val app: HttpApp = seal(en.combineK(es))
 ```
 
 ### Unit test
 
-```tut
-asyncAssert(false, Cache.fetchT("/zoidberg.png").isDefined)
-asyncAssert(true, Archive.fetchT("/zoidberg.png").isDefined)
-asyncAssert(200, svc(Request("GET", "/zoidberg.png", ""))
-  .fold(404)(_.status))
+```tut:book
+val req = Request(POST, Uri("/hola"), "Boston")
+asyncAssert("¡Hola, Boston!", app(req).map(_.body))
 ```
+
+---
+
+## Combination with SemigroupK
+
+```tut:silent
+def log[F[_]: Monad](app: Http[F]): Http[F] =
+  app.mapF(Monad[F].pure(println("TRANSLATING")) *> _)
+
+val en: HttpRoutes = hello(Uri("/hello"))
+val es: HttpRoutes = log(translate(hello(Uri("/hola"))))
+val app: HttpApp = seal(en.combineK(es))
+```
+
+---
+
+## Combination with SemigroupK
+
+```tut:silent
+def log[F[_]: Monad](app: Http[F]): Http[F] =
+  app.mapF(Monad[F].pure(println("TRANSLATING")) *> _)
+
+val en: HttpRoutes = hello(Uri("/hello"))
+val es: HttpRoutes = log(translate(hello(Uri("/hola"))))
+val app: HttpApp = seal(en.combineK(es))
+```
+
+### Unit test
+
+```tut:book
+val req = Request(POST, Uri("/hello"), "Boston")
+asyncAssert("Hello, Boston!", app(req).map(_.body))
+```
+
+---
+
+## Sync
+
+Quoth the [cats-effect docs](https://github.com/typelevel/cats-effect/blob/master/site/src/main/tut/typeclasses/sync.md):
+
+> A `Monad` that can suspend the execution of side effects in the `F[_]` context.
+
+## IO
+
+Quoth the [cats-effect docs](https://github.com/typelevel/cats-effect/blob/master/site/src/main/tut/typeclasses/io.md):
+
+> Effects contained within this abstraction are not evaluated until the "end of the world", which is to say, when one of the "unsafe" methods are used.
 
 ---
 
 ## Version 0.0.7
 
-An HTTP service is just a Kleisli arrow from a request to a response
-in the option monad transformer applied to Future.
+HTTP is just a Kleisli function from a request to a polymorphic effect of a response.
 
 ```tut:silent
-import cats.data.{Kleisli, OptionT}
-import cats.implicits._
-type HttpService = Kleisli[OptionT[Future, ?], Request, Response]
+type Http[F[_]] = Kleisli[F, Request, Response]
+```
+
+An HTTP application is just HTTP in an IO effect.
+
+```tut:silent
+type HttpApp = Http[IO]
+```
+
+HTTP routes are just HTTP in IO of an Option.
+
+```tut:silent
+case class IOOption[A](value: IO[Option[A]])
+type HttpRoutes = Http[IOOption]
+object HttpRoutes {
+  def of(pf: PartialFunction[Request, IO[Response]]): HttpRoutes =
+    Kleisli(req => IOOption(pf.lift(req).sequence))
+}
 ```
 
 ---
 
-## Image server, v0.0.7
+## Another stack, another artisanally handcrafted instance
 
 ```tut:silent
-def imageServer(fetch: String => OptionT[Future, Image]): HttpService = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
+implicit val syncForIOOption: Sync[IOOption] with SemigroupK[IOOption] = 
+  new Sync[IOOption] with StackSafeMonad[IOOption] with SemigroupK[IOOption] {
+    def pure[A](a: A): IOOption[A] = IOOption(IO.pure(Some(a)))
+    def handleErrorWith[A](fa: IOOption[A])(f: Throwable => IOOption[A]): IOOption[A] =
+      IOOption(fa.value.handleErrorWith(f(_).value))
+    def raiseError[A](e: Throwable): IOOption[A] =
+      IOOption(IO.raiseError(e).map(Some(_)))
+    def suspend[A](thunk: => IOOption[A]): IOOption[A] =
+      IOOption(IO.suspend(thunk.value))
+    def flatMap[A, B](fa: IOOption[A])(f: A => IOOption[B]): IOOption[B] =
+      IOOption(fa.value.flatMap {
+        case Some(a) => f(a).value
+        case None => IO.pure(None) 
+      })
+    def combineK[A](x: IOOption[A], y: IOOption[A]): IOOption[A] =
+      IOOption(x.value.flatMap {
+        case Some(a) => IO.pure(Some(a))
+        case None => y.value
+      })
 }
-val svc: HttpService = imageServer(Cache.fetchT) <+> imageServer(Archive.fetchT)
 ```
 
 ---
 
-## Image server, v0.0.7
+## IO
+
+```tut:invisible
+def translate[F[_]: Monad](app: Http[F]): Http[F] = for {
+  resp <- app
+  tx <- Kleisli.liftF(Translator[F](resp.body))
+} yield resp.copy(body = tx)
+def seal(routes: HttpRoutes): HttpApp =
+  routes.mapF(_.value.map(_.getOrElse(Response(NotFound))))
+```
 
 ```tut:silent
-def imageServer(fetch: String => OptionT[Future, Image]): HttpService = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
+def log[F[_]: Sync](app: Http[F]): Http[F] =
+  app.mapF(Sync[F].delay(println("TRANSLATE")) *> _)
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    IO(Response(OK, s"Hello, $name!"))
 }
-val svc: HttpService = imageServer(Cache.fetchT) <+> imageServer(Archive.fetchT)
+
+val en: HttpRoutes = hello(Uri("/hello"))
+val es: HttpRoutes = log(translate(hello(Uri("/hola"))))
+val app: HttpApp = seal(en.combineK(es))
+```
+
+---
+
+## IO
+
+```tut:silent
+def log[F[_]: Sync](app: Http[F]): Http[F] =
+  app.mapF(Sync[F].delay(println("TRANSLATE")) *> _)
+
+def hello(theUri: Uri): HttpRoutes = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    IO(Response(OK, s"Hello, $name!"))
+}
+
+val en: HttpRoutes = hello(Uri("/hello"))
+val es: HttpRoutes = log(translate(hello(Uri("/hola"))))
+val app: HttpApp = seal(en.combineK(es))
 ```
 
 ### Unit test
 
-```tut
-asyncAssert(false, Cache.fetchT("/zoidberg.png").isDefined)
-asyncAssert(true, Archive.fetchT("/zoidberg.png").isDefined)
-asyncAssert(200, svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status))
+```tut:book
+val req = Request(POST, Uri("/hello"), "Boston")
+asyncAssert("Hello, Boston!", app(req).map(_.body).unsafeToFuture)
 ```
 
 ---
 
-## Image server, v0.0.7, with logging
+## OptionT
 
-```tut:silent
-def imageServer(fetch: String => OptionT[Future, Image]): HttpService = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-val svc: HttpService = imageServer(Cache.lfetchT) <+> imageServer(Archive.lfetchT)
-```
+Quoth the [Cats docs](https://typelevel.org/cats/datatypes/optiont.html)
 
-### Oops
-
-```tut:book
-svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status)
-```
-
-![I'm going for a scuttle](http://i.imgur.com/Hu20yUC.gif)
+> `OptionT[F[_], A]` is a light wrapper on an `F[Option[A]]`.  Speaking technically, it is a monad transformer for `Option`.
 
 ---
 
 ## Version 0.0.8
 
-An HTTP service is just a Kleisli arrow from a request to a response
-in the option monad transformer applied to IO.
+HTTP is just a Kleisli function from a request to a polymorphic effect of a response.
 
 ```tut:silent
-import cats.data.{Kleisli, OptionT}
-import cats.effect.IO
-import cats.implicits._
-type HttpService = Kleisli[OptionT[IO, ?], Request, Response]
+type Http[F[_]] = Kleisli[F, Request, Response]
 ```
 
----
-
-## Image server, v0.0.8
+An HTTP application is just HTTP in IO effect.
 
 ```tut:silent
-def imageServer(fetch: String => OptionT[IO, Image]): HttpService = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-val svc: HttpService = imageServer(Cache.lfetch[IO]) <+> imageServer(Archive.lfetch[IO])
+type HttpApp[F[_]] = Http[F]
 ```
 
----
-
-## Image server, v0.0.8
+HTTP routes are just HTTP in an Option monad transformer over a polymorphic context.
 
 ```tut:silent
-def imageServer(fetch: String => OptionT[IO, Image]): HttpService = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-val svc: HttpService = imageServer(Cache.lfetch[IO]) <+> imageServer(Archive.lfetch[IO])
-```
-
-```tut:book
-svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status)
-```
-
----
-
-## Image server, v0.0.8
-
-```tut:silent
-def imageServer(fetch: String => OptionT[IO, Image]): HttpService = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-val svc: HttpService = imageServer(Cache.lfetch[IO]) <+> imageServer(Archive.lfetch[IO])
-```
-
-```tut:book
-svc(Request("GET", "/zoidberg.png", "")).fold(404)(_.status).unsafeRunSync
-```
-
----
-class: center, middle
-
-![Why not Monix?](https://i.imgflip.com/25qxo7.jpg)
-
----
-
-## Version 0.0.9
-
-An HTTP service is just a Kleisli arrow from a request to a response
-in the option monad transformer applied to an arbitrary effect.
-
-```tut:silent
-import cats.Applicative, cats.data.{Kleisli, OptionT}, cats.implicits._
-type HttpService[F[_]] = Kleisli[OptionT[F, ?], Request, Response]
-
-object HttpService {
-  def apply[F[_]: Applicative](pf: PartialFunction[Request, F[Response]]): HttpService[F] =
-    Kleisli(pf.lift.andThen(_.sequence).andThen(OptionT.apply))
+type HttpRoutes[F[_]] = Http[OptionT[F, ?]]
+object HttpRoutes {
+  def of[F[_]: Sync](pf: PartialFunction[Request, F[Response]]): HttpRoutes[F] =
+    Kleisli(req => OptionT(pf.lift(req).sequence))
 }
 ```
 
 ---
 
-## Image server, v0.0.9
-
-```tut:silent
-import cats.effect.Sync, monix.eval.Task, monix.execution.Scheduler.Implicits.global
-def imageServer[F[_]: Sync](fetch: String => OptionT[F, Image]): HttpService[F] = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-def svc[F[_]: Sync] = imageServer[F](Cache.lfetch[F]) <+> imageServer(Archive.lfetch[F])
-```
-
-### Bring your own effect
-
-```tut:book
-svc[IO].run(Request("GET", "/zoidberg.png", "")).
-  fold(404)(_.status).unsafeRunSync
-svc[Task].run(Request("GET", "/zoidberg.png", "")).
-  fold(404)(_.status).foreach(println)
-```
-
----
-
-## Image server, v0.0.9
-
-```tut:silent
-import cats.effect.Sync, monix.eval.Task, monix.execution.Scheduler.Implicits.global
-def imageServer[F[_]: Sync](fetch: String => OptionT[F, Image]): HttpService[F] = Kleisli {
-  case Request("GET", path, _) => fetch(path).map(Response(200, _))
-  case _ => OptionT.none
-}
-def svc[F[_]: Sync] = imageServer[F](Cache.lfetch[F]) <+> imageServer(Archive.lfetch[F])
-```
-
-### But not Future 
-
-```tut:fail
-svc[Future].run(Request("GET", "/zoidberg.png", "")).fold(404)(_.status)
-```
-
----
-
-## Translation, v0.0.9
-
-```tut:silent
-def svc[F[_]: Sync](translate: String => F[String]): HttpService[F] = HttpService {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
-}
-val xlate = svc(Translator.get[IO](English, Spanish))
-```
-
----
-
-## Translation, v0.0.9
-
-```tut:silent
-def svc[F[_]: Sync](translate: String => F[String]): HttpService[F] = HttpService {
-  case Request("POST", "/translate", name) =>
-    translate(name).map(Response(200, _))
-}
-val xlate = svc(Translator.get[IO](English, Spanish))
-```
+## OptionT[IO, ?]
 
 ```tut:invisible
-import Poems._
+def translate[F[_]: Sync](app: Http[F]): Http[F] = for {
+  resp <- app
+  tx <- Kleisli.liftF(Translator[F](resp.body))
+} yield resp.copy(body = tx)
+
+def seal[F[_]: Functor](routes: HttpRoutes[F]): HttpApp[F] =
+  routes.mapF(_.getOrElse(Response(NotFound)))
 ```
 
-```tut
-xlate.run(Request("POST", "/translate", PaulReveresRide)).fold("")(_.body).unsafeRunSync
+```tut:silent
+def hello[F[_]: Sync](theUri: Uri): HttpRoutes[F] = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Response(OK, s"Hello, $name!").pure[F]
+}
+
+val en: HttpRoutes[IO] = hello(Uri("/hello"))
+val es: HttpRoutes[IO] = translate(hello(Uri("/hola")))
+val app: HttpApp[IO] = seal(en.combineK(es))
 ```
 
 ---
 
-## Version 0.0.10
+## OptionT[IO, ?]
 
-An HTTP service is just a Kleisli arrow from a streaming request to a
-streaming response in the option monad transformer applied to an
-arbitrary effect.
+```tut:silent
+def hello[F[_]: Sync](theUri: Uri): HttpRoutes[F] = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Applicative[F].pure(Response(OK, s"Hello, $name!"))
+}
+
+val en: HttpRoutes[IO] = hello(Uri("/hello"))
+val es: HttpRoutes[IO] = translate(hello(Uri("/hola")))
+val app: HttpApp[IO] = seal(en.combineK(es))
+```
+
+### Unit test
+
+```tut:book
+val req = Request(POST, Uri("/hello"), "Boston")
+asyncAssert("Hello, Boston!", app(req).map(_.body).unsafeToFuture)
+```
+
+---
+
+## OptionT[Task, ?]
+
+```tut:silent
+def hello[F[_]: Sync](theUri: Uri): HttpRoutes[F] = HttpRoutes.of {
+  case Request(POST, uri, name) if uri == theUri =>
+    Response(OK, s"Hello, $name!").pure[F]
+}
+
+val en: HttpRoutes[Task] = hello(Uri("/hello"))
+val es: HttpRoutes[Task] = translate(hello(Uri("/hola")))
+val app: HttpApp[Task] = seal(en.combineK(es))
+```
+
+### Unit test
+
+```tut:invisible
+implicit val sched: monix.execution.Scheduler = Scheduler(implicitly[ExecutionContext])
+```
+
+```tut:book
+val req = Request(POST, Uri("/hello"), "Boston")
+asyncAssert("Hello, Boston!", app(req).map(_.body).runAsync)
+```
+
+---
+
+## Translation
+
+```tut:silent
+def app[F[_]: Sync]: HttpApp[F] = seal(HttpRoutes.of {
+  case Request(POST, Uri("/translate"), text) =>
+    Translator[F](text).map(Response(OK, _))
+})
+```
+
+```tut:book
+app[IO].run(Request(POST, Uri("/translate"), PaulReveresRide)).unsafeRunSync
+```
+
+---
+
+## Streaming bodies
 
 ```tut:silent
 import fs2.Stream
+
 case class Request[F[_]](
-  method: String,
-  uri: String,
+  method: Method,
+  uri: Uri,
+  // headers,
+  // httpVersion,
   body: Stream[F, Byte],
 )
+
 case class Response[F[_]](
-  status: Int, 
+  status: Status,
+  // headers,
+  // httpVersion,
   body: Stream[F, Byte],
 )
-type HttpService[F[_]] = Kleisli[OptionT[F, ?], Request[F], Response[F]]
 ```
 
-```tut:invisible
-object HttpService {
-  def apply[F[_]: Applicative](pf: PartialFunction[Request[F], F[Response[F]]]): HttpService[F] =
-    Kleisli(pf.lift.andThen(_.sequence).andThen(OptionT.apply))
+---
+
+## I'm probably almost out of time.  Final version.
+
+HTTP is just a Kleisli function from a streaming request to a polymorphic effect of a streaming response.
+
+```tut:silent
+type Http[F[_], G[_]] = Kleisli[F, Request[G], Response[G]]
+```
+
+An HTTP application is just HTTP where the response effect is the stream effect.
+
+```tut:silent
+type HttpApp[F[_]] = Http[F, F]
+```
+
+HTTP routes are just HTTP where the response context is an Option monad transformer applied to the stream effect.
+
+```tut:silent
+type HttpRoutes[F[_]] = Http[OptionT[F, ?], F]
+object HttpRoutes {
+  def of[F[_]: Sync](pf: PartialFunction[Request[F], F[Response[F]]]): HttpRoutes[F] =
+    Kleisli(req => OptionT(Sync[F].suspend(pf.lift(req).sequence)))
 }
 ```
 
 ---
 
-## Translation, v0.0.10
+## Streaming translation
 
 ```tut:silent
-import fs2.{Pipe, Stream}, fs2.text._
-def svc[F[_]: Sync](translate: Pipe[F, String, String]): HttpService[F] = 
-  HttpService {
-    case Request("POST", "/translate", body) =>
-      val xlated = translate(body.through(utf8Decode))
-        .through(utf8Encode)
-      Sync[F].pure(Response(200, xlated))
-  }
-val xlate = svc(Translator.streaming[IO](English, Spanish))
+def seal[F[_]: Functor](routes: HttpRoutes[F]): HttpApp[F] =
+  routes.mapF(_.getOrElse(Response(NotFound, Stream.empty)))
+```
+
+```tut:silent
+def app[F[_]: Sync]: HttpApp[F] = seal(HttpRoutes.of {
+  case Request(POST, Uri("/translate"), body) =>
+    Response(OK, Translator.streaming[F](
+      body.through(fs2.text.utf8Decode)
+    ).through(fs2.text.utf8Encode)).pure[F]
+})
 ```
 
 ---
 
-## Consume the streaming endpoint, v0.0.10
+## Unit test
 
-```tut
-(Stream.eval(xlate(Request("POST", "/translate", PaulReveresStream)).value)
-   .unNoneTerminate          // strip away the option
-   .flatMap(_.body)          // just the body
-   .through(utf8Decode)      // bytes to Strings
-   .take(5)                  // take the first 5
-   .compile.toList           // Stream[F,String] => F[List[String]]
-   .map(_.mkString("\n"))    // join lines together
-   .unsafeRunSync)           // the end of the world
+```tut:book
+val ioResp = app[IO].run(Request(POST, Uri("/translate"), PaulReveresStream))
+
+(Stream.eval(ioResp)             // => Stream[F, Response[F]]
+   .flatMap(_.body)              // => Stream[F, Byte]
+   .through(fs2.text.utf8Decode) // => Stream[F, String]
+   .take(5)                      // => Stream[F, String]
+   .compile.toList               // => F[List[String]]
+   .map(_.mkString("\n"))        // => F[String]
+   .unsafeRunSync)               // => String
 ```
 
 ---
 
 ## PureConfig
+
+```
+demo-conf {
+  url = "jdbc:h2:mem:test;DB_CLOSE_DELAY=-1", 
+  username = "sa",
+  password = ""
+}
+```
 
 ```tut:book
 import pureconfig._, pureconfig.module.catseffect._
@@ -955,10 +1168,12 @@ val config = loadConfigF[IO, DbConf]
 
 ```tut:book
 import doobie._, doobie.implicits._, doobie.h2._
-def xa(conf: DbConf): IO[Transactor[IO]] = 
+
+def transactor(conf: DbConf): IO[Transactor[IO]] = 
   H2Transactor.newH2Transactor[IO](conf.url, conf.username, conf.password)
-def numbers(xa: Transactor[IO]): Stream[IO, (Int, String)] =
-  sql"select id, en from numbers order by id".query[(Int, String)].stream.transact(xa)
+
+def numbers(transactor: Transactor[IO]): Stream[IO, (Int, String)] =
+  sql"select id, en from numbers order by id".query[(Int, String)].stream.transact(transactor)
 ```
 
 ---
@@ -973,29 +1188,33 @@ import jawnfs2._
 ```
 
 ```tut:book
-Stream.emit("""{"one":1}\n{"two":2}\n{"three":3}\n""").
+Stream.emit("""[{"one":1},{"two":2},{"three":3}]""").
   covary[IO].
-  through(parseJsonStream[IO, String, Json]).
+  unwrapJsonArray.
   evalMap(s => IO(println(s))).
-  compile.drain
+  compile.drain.unsafeRunSync
 ```
 
 ---
 
-## A real http4s service
+## A real http4s API
+
+```tut:invisible
+import org.http4s.Status.Ok
+```
 
 ```tut:silent
-import io.circe.syntax._
-import org.http4s._, org.http4s.circe._
+import io.circe.literal._
+import org.http4s._, 
+import org.http4s.circe._
 
-def svc(xa: Transactor[IO]): HttpService[IO] = 
-  HttpService[IO] {
-    case req =>
-      val nums = numbers(xa).map { case (i, n) =>
-        Json.obj("int" -> i.asJson, "name" -> n.asJson).asJson
-      }
-      Response(Status.Ok).withBody(nums)
-  }
+def app(xa: Transactor[IO]) = HttpService[IO] {
+  case req =>
+    val nums = numbers(xa).map { case (i, n) =>
+      json"""{"int": $i, "name": $n}"""
+    }
+    Response(Ok).withBody(nums)
+}
 ```
 
 ---
@@ -1014,6 +1233,7 @@ import org.http4s.server.blaze._
 ```tut:silent
 def parseResponse(resp: Response[IO]): IO[List[Json]] = {
   resp.body.chunks.parseJsonStream
+    .take(3)
     .compile.toList
 }
 
@@ -1021,7 +1241,7 @@ val prog = for {
   c      <- config
   xa     <- H2Transactor.newH2Transactor[IO](c.url, c.username, c.password)
   _      <- DoobieExample.setUp(xa)
-  server <- BlazeBuilder[IO].mountService(svc(xa)).bindHttp(8080).start
+  server <- BlazeBuilder[IO].mountService(app(xa)).bindHttp(8080).start
   client <- Http1Client[IO]()
   req    <- GET(uri("http://localhost:8080/"))
   nums   <- client.fetch(req)(resp => parseResponse(resp))
@@ -1030,9 +1250,61 @@ val prog = for {
 } yield nums
 ```
 
-```tut
+---
+
+## All together now
+
+```tut:book
 prog.unsafeRunSync()
 ```
+
+---
+# Bonus talking point in case I talked too fast
+
+Thanks to [@iravid](https://gist.github.com/iravid/7c4b3d0bbd5a9de058bd7a5534073b4d) for this observation:
+
+```scala
+abstract class ContT[F[_], R, A] {
+  def run(cont: A => F[R]): F[R]
+
+  def runPure(cont: A => R)(implicit F: Applicative[F]): F[R] =
+    run((a: A) => cont(a).pure[F])
+}
+
+pathPrefix("hello") run { _ =>
+  get runPure { _ =>
+    complete("OK")
+  }
+}
+```
+ 
+---
+# Acknowledgements
+
+Acknowledgements
+
+Thanks to       | GitHub                                                           | Twitter
+--------------- | ------                                                           | -------------
+![](https://avatars3.githubusercontent.com/u/538571?s=24&v=4) Arya Irani      | [@aryairani](https://github.com/aryairani)                       | [@aryairani](https://twitter.com/aryairani)
+![](https://avatars3.githubusercontent.com/u/1432894?s=24&v=4) Bjørn Madsen    | [@aeons](https://github.com/aeons)                               | [@bjoernmadsen](https://twitter.com/bjoernmadsen)
+![](https://avatars3.githubusercontent.com/u/3615303?s=24&v=4) Carlos Quiroz   | [@cquiroz](https://github.com/cquiroz)                           | [@cquiroz](https://twitter.com/cquiroz)
+![](https://avatars3.githubusercontent.com/u/10272700?s=24&v=4)Chris Davenport | [@ChristopherDavenport](https://github.com/ChristopherDavenport) | [@davenpcm](https://twitter.com/davenpcm)
+![](https://avatars3.githubusercontent.com/u/7769582?s=24&v=4) Fabio Labella   | [@SystemFw](https://github.com/SystemFw)                         | too smart for that
+![](https://avatars3.githubusercontent.com/u/15273652?s=24&v=4) Jose Cardona    | [@jmcardon](https://github.com/jmcardon)                         | [@JM0x5C](https://twitter.com/@JM0x5C)
+
+---
+# Formation is hiring
+
+<img src="http://formation.ai/assets/favicon/apple-touch-icon.png" style="float: right;" />
+
+If you'd like to do some combination of the following, talk to me:
+- Scala
+- Haskell
+- Machine learning
+- Big data
+- Remote friendly
+
+[Open positions](http://formation.ai/careers)
 
 ---
 class: center, middle
